@@ -1,26 +1,32 @@
 # [zemscripten](https://github.com/zig-gamedev/zemscripten)
 
-Zig build package and shims for [Emscripten](https://emscripten.org) emsdk
+Zig build package and bindings for an externally configured [Emscripten](https://emscripten.org) toolchain.
 
 ## How to use it
 
-Add `zemscripten` and (optionally) `emsdk` to your build.zig.zon dependencies
-```sh
-    zig fetch --save=emsdk https://github.com/emscripten-core/emsdk/archive/refs/tags/4.0.3.tar.gz
-```
+This integration branch requires Zig 0.16.0. Add `zemscripten` to your
+`build.zig.zon` dependencies, configure Emscripten externally, and put `emcc`
+and `emrun` on `PATH`. The package does not download or activate an emsdk.
 
-Emsdk must be activated before it can be used. You can use `activateEmsdkStep` to create a build step for that:
-```zig
-    const activate_emsdk_step = @import("zemscripten").activateEmsdkStep(b);
-```
+SDK discovery and a real Emscripten 6.0.6 driver invocation were exercised.
+Full application/Wasm/browser acceptance remains unverified for this branch.
+The binding module imports Emscripten functions and is not a native-linkable
+test executable.
+
+The obsolete activation, SDK-version and default-shell-path helpers have
+been removed. Omit activation-step dependencies; pass an explicit shell
+through `shell_file_path` only when your application needs one.
 
 Add zemscripten's "root" module to your wasm compile target., then create an `emcc` build step. We use zemscripten's default flags and settings which can be overridden for your project specific requirements. Refer to the [emcc documentation](https://emscripten.org/docs/tools_reference/emcc.html). Example build.zig code:
 ```zig
-    const wasm = b.addStaticLibrary(.{
+    const wasm = b.addLibrary(.{
         .name = "MyGame",
-        .root_source_file = b.path("src/main.zig"),
-        .target = target,
-        .optimize = optimize,
+        .linkage = .static,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/main.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
     });
 
     const zemscripten = b.dependency("zemscripten", .{});
@@ -54,7 +60,6 @@ Add zemscripten's "root" module to your wasm compile target., then create an `em
             .install_dir = .{ .custom = "web" },
         },
     );
-    emcc_step.dependOn(activate_emsdk_step);
 
     b.getInstallStep().dependOn(emcc_step);
 ```
