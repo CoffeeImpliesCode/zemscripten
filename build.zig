@@ -10,64 +10,44 @@ pub fn build(b: *std.Build) void {
     _ = b.addModule("root", .{ .root_source_file = b.path("src/zemscripten.zig") });
 }
 
+/// Locate an executable on PATH. Returns null when absent — the caller then
+/// reports the missing toolchain.
+fn which(b: *std.Build, name: []const u8) ?[]const u8 {
+    const path = b.graph.environ_map.get("PATH") orelse return null;
+    var it = std.mem.splitScalar(u8, path, ':');
+    while (it.next()) |dir| {
+        if (dir.len == 0) continue;
+        const probe = std.fs.path.join(b.allocator, &.{ dir, name }) catch continue;
+        std.Io.Dir.cwd().access(b.graph.io, probe, .{}) catch continue;
+        return probe;
+    }
+    return null;
+}
+
+/// Path to the emcc driver. Skript's devenv provides the Emscripten
+/// toolchain (nixpkgs `emscripten`), so no emsdk checkout is involved.
 pub fn emccPath(b: *std.Build) []const u8 {
-    return std.fs.path.join(b.allocator, &.{
-        b.dependency("emsdk", .{}).path("").getPath(b),
-        "upstream",
-        "emscripten",
-        "emcc.py",
-    }) catch unreachable;
+    return which(b, "emcc") orelse {
+        @panic("emcc not found on PATH — add the `emscripten` package to the devenv");
+    };
 }
 
 pub fn emrunPath(b: *std.Build) []const u8 {
-    return std.fs.path.join(b.allocator, &.{
-        b.dependency("emsdk", .{}).path("").getPath(b),
-        "upstream",
-        "emscripten",
-        switch (builtin.target.os.tag) {
-            .windows => "emrun.bat",
-            else => "emrun",
-        },
-    }) catch unreachable;
+    return which(b, "emrun") orelse {
+        @panic("emrun not found on PATH — add the `emscripten` package to the devenv");
+    };
 }
 
 pub fn htmlPath(b: *std.Build) []const u8 {
-    return std.fs.path.join(b.allocator, &.{
-        b.dependency("emsdk", .{}).path("").getPath(b),
-        "upstream",
-        "emscripten",
-        "src",
-        "shell.html",
-    }) catch unreachable;
+    _ = b;
+    // emcc's default shell is used unless a caller passes --shell-file;
+    // there is no standalone shell.html to point at.
+    return "";
 }
 
+/// No-op with the devenv toolchain: emcc is already installed and
+/// activated. Kept for API compatibility with upstream build.zig files.
 pub fn activateEmsdkStep(b: *std.Build) *std.Build.Step {
-    const emsdk_script_path = std.fs.path.join(b.allocator, &.{
-        b.dependency("emsdk", .{}).path("").getPath(b),
-        switch (builtin.target.os.tag) {
-            .windows => "emsdk.bat",
-            else => "emsdk",
-        },
-    }) catch unreachable;
-
-    var emsdk_update = b.addSystemCommand(&.{ emsdk_script_path, "update" });
-
-    var emsdk_install = b.addSystemCommand(&.{ emsdk_script_path, "install", emsdk_version });
-    emsdk_install.step.dependOn(&emsdk_update.step);
-
-    switch (builtin.target.os.tag) {
-        .linux, .macos => {
-            emsdk_install.step.dependOn(&b.addSystemCommand(&.{ "chmod", "+x", emsdk_script_path }).step);
-        },
-        .windows => {
-            emsdk_install.step.dependOn(&b.addSystemCommand(&.{ "takeown", "/f", emsdk_script_path }).step);
-        },
-        else => {},
-    }
-
-    var emsdk_activate = b.addSystemCommand(&.{ emsdk_script_path, "activate", emsdk_version });
-    emsdk_activate.step.dependOn(&emsdk_install.step);
-
     const step = b.allocator.create(std.Build.Step) catch unreachable;
     step.* = std.Build.Step.init(.{
         .id = .custom,
@@ -77,29 +57,6 @@ pub fn activateEmsdkStep(b: *std.Build) *std.Build.Step {
             fn make(_: *std.Build.Step, _: std.Build.Step.MakeOptions) anyerror!void {}
         }.make,
     });
-
-    switch (builtin.target.os.tag) {
-        .linux, .macos => {
-            const chmod_emcc = b.addSystemCommand(&.{ "chmod", "a+x", emccPath(b) });
-            chmod_emcc.step.dependOn(&emsdk_activate.step);
-            step.dependOn(&chmod_emcc.step);
-
-            const chmod_emrun = b.addSystemCommand(&.{ "chmod", "a+x", emrunPath(b) });
-            chmod_emrun.step.dependOn(&emsdk_activate.step);
-            step.dependOn(&chmod_emrun.step);
-        },
-        .windows => {
-            const takeown_emcc = b.addSystemCommand(&.{ "takeown", "/f", emccPath(b) });
-            takeown_emcc.step.dependOn(&emsdk_activate.step);
-            step.dependOn(&takeown_emcc.step);
-
-            const takeown_emrun = b.addSystemCommand(&.{ "takeown", "/f", emrunPath(b) });
-            takeown_emrun.step.dependOn(&emsdk_activate.step);
-            step.dependOn(&takeown_emrun.step);
-        },
-        else => {},
-    }
-
     return step;
 }
 
